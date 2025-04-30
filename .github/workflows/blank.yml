@@ -26,14 +26,24 @@ jobs:
           java-version: '11'
           distribution: 'temurin'
 
+      - name: Configure Maven Authentication
+        run: |
+          mkdir -p ~/.m2
+          echo "<settings>
+                  <servers>
+                    <server>
+                      <id>cloudsmith-repo</id>
+                      <username>${{ secrets.CLOUDSMITH_USER }}</username>
+                      <password>${{ secrets.CLOUDSMITH_API_KEY }}</password>
+                    </server>
+                  </servers>
+                </settings>" > ~/.m2/settings.xml
+
       - name: Clean & Deploy
-        env:
-          CLOUDSMITH_USER: ${{ vars.CLOUDSMITH_USER }}
-          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
         run: |
           mvn clean deploy -B \
             -DskipTests \
-            -DaltDeploymentRepository=cloudsmith-repo::default::https://${{ env.CLOUDSMITH_USER }}:${{ env.CLOUDSMITH_API_KEY }}@maven.cloudsmith.io/workspace-for-rajdeep/maven-test/
+            -DaltDeploymentRepository=cloudsmith-repo::default::https://maven.cloudsmith.io/workspace-for-rajdeep/maven-test/
 
       - name: Wait for Package Synchronization
         id: wait-for-package-sync
