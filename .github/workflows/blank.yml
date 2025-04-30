@@ -41,9 +41,7 @@ jobs:
 
       - name: Clean & Deploy
         run: |
-          mvn clean deploy -B \
-            -DskipTests \
-            -DaltDeploymentRepository=cloudsmith-repo::default::https://maven.cloudsmith.io/workspace-for-rajdeep/maven-test/
+          mvn clean deploy -B -DskipTests
 
       - name: Wait for Package Synchronization
         id: wait-for-package-sync
