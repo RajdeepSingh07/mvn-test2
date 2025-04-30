@@ -1,0 +1,150 @@
+name: Maven Package Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact-name:
+        description: 'Artifact name'
+        required: true
+        type: string
+      version:
+        description: 'Version'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Maven
+        uses: actions/setup-java@v2
+        with:
+          java-version: '11'
+          distribution: 'adoptopenjdk'
+
+      - name: Clean & Deploy
+        env:
+          CLOUDSMITH_USER: ${{ vars.CLOUDSMITH_USER }}
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+        run: |
+          mvn clean deploy -B \
+            -DskipTests \
+            -DaltDeploymentRepository=cloudsmith-repo::default::https://${{ env.CLOUDSMITH_USER }}:${{ env.CLOUDSMITH_API_KEY }}@maven.cloudsmith.io/workspace-for-rajdeep/maven-test/
+
+      - name: Wait for Package Synchronization
+        id: wait-for-package-sync
+        continue-on-error: true
+        env:
+          ORGANIZATION: thrivent
+          REPOSITORY: maven-non-prod
+          PACKAGE_NAME: ${{ inputs.artifact-name }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+          TIMEOUT: 120
+        shell: bash
+        run: |
+          set +e
+          set +o pipefail
+
+          get_package_identifier() {
+              local package_name=${1:-""}
+              local package_version=${2:-""}
+              local query=""
+
+              # Build the query based on whether the version contains SNAPSHOT or not
+              if [[ "$package_version" == *"SNAPSHOT"* ]]; then
+                  # For snapshot versions, strip SNAPSHOT and use pattern matching
+                  local version_without_snapshot=$(echo "$package_version" | sed 's/SNAPSHOT//g')
+                  query="name:$package_name version:$version_without_snapshot*"
+                  echo "Using snapshot query pattern: $query" > /dev/stderr
+                  cloudsmith list packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY" 2> /dev/null | \
+                    jq -r --arg version "$version_without_snapshot" '
+                        # First get just the data array
+                        .data
+                        # Filter array to keep only items where version matches pattern
+                        | map(select(.version | startswith($version)))
+                        # Sort by version (which includes timestamp) in descending order
+                        | sort_by(.version) | reverse
+                        # Take first item (latest) and get its slug
+                        | first | .slug_perm'
+              else
+                  # For release versions, use exact version matching
+                  query="name:$package_name version:$package_version"
+                  echo "Using release query pattern: $query" > /dev/stderr
+                  cloudsmith list packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY" 2> /dev/null | jq -r '.data[0].slug_perm' | sed -e 's/^"//' -e 's/"$//'
+              fi
+          }
+
+          get_package_status() {
+              local identifier=${1:-""}
+              cloudsmith status "$ORGANIZATION/$REPOSITORY/$identifier" 2> /dev/null
+          }
+
+          wait_for_package_sync() {
+              local package_name=${1:-""}
+              local package_version=${2:-""}
+              local total_time_limit="$TIMEOUT"
+              local identifier=""
+              local package_status=""
+              local total_time=0
+              local package_sync_complete=1
+              local package_sync_failed=0
+              local sleep_time=10
+
+              while [[ $total_time -lt $total_time_limit ]]; do
+                  if [[ -z "$identifier" ]] || [[ "$identifier" == "null" ]]; then
+                      identifier=$(get_package_identifier "$package_name" "$package_version")
+                      if [[ -z "$identifier" ]] || [[ "$identifier" == "null" ]]; then
+                        echo "Waiting for package .. (name:$package_name version:$package_version)"
+                        total_time=$((total_time+$sleep_time))
+                        sleep $sleep_time
+                        continue
+                      fi
+                  fi
+
+                  package_status=$(get_package_status "$identifier")
+
+                  echo "$package_status" | grep --quiet 'Completed'
+                  package_sync_complete=$?
+
+                  echo "$package_status" | grep --quiet 'Failed'
+                  package_sync_failed=$?
+
+                  if [[ $package_sync_complete -eq 0 ]] || [[ $package_sync_failed -eq 0 ]]; then
+                      break
+                  fi
+
+                  echo "Waiting for package status ... (identifier: $identifier)"
+                  total_time=$((total_time+$sleep_time))
+                  sleep $sleep_time
+              done
+
+              if [[ $total_time -gt $total_time_limit ]]; then
+                  echo "Timed out after waiting $total_time seconds for package to sync"
+                  exit 1
+              fi
+
+              if [[ $package_sync_complete -ne 0 ]]; then
+                echo "Package failed to sync after $total_time seconds"
+                exit 1
+              fi
+
+              echo "Package synced successfully after $total_time seconds"
+
+              # Output the identifier to be used in subsequent steps
+              echo "package-id=$identifier" >> "$GITHUB_OUTPUT"
+              echo "Found package id: $identifier"
+          }
+
+          wait_for_package_sync "$PACKAGE_NAME" "$PACKAGE_VERSION"
+
+      - name: Hydrate Artifact Metadata
+        if: ${{ steps.wait-for-package-sync.outcome == 'success' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "Hydrating artifact metadata for thrivent/maven-non-prod/${{ steps.wait-for-package-sync.outputs.package-id }}"
+          cloudsmith tags add thrivent/maven-non-prod/${{ steps.wait-for-package-sync.outputs.package-id }} ${{ github.repository }},git-${{ github.sha }}
