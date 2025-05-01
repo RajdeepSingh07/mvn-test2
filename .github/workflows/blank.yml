@@ -68,25 +68,53 @@ jobs:
 
               # Build the query based on whether the version contains SNAPSHOT or not
               if [[ "$package_version" == *"SNAPSHOT"* ]]; then
-                  # For snapshot versions, strip SNAPSHOT and use pattern matching
-                  local version_without_snapshot=$(echo "$package_version" | sed 's/SNAPSHOT//g')
-                  query="name:$package_name version:$version_without_snapshot*"
-                  echo "DEBUG:"
-                  echo "  package_name: $package_name"
-                  echo "  package_version: $package_version"
-                  echo "  version_without_snapshot: $version_without_snapshot"
-                  echo "  final query: $query" > /dev/stderr
-                  echo "Using snapshot query pattern: $query" > /dev/stderr
-                  cloudsmith list packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY" 2> /dev/null | \
-                    jq -r --arg version "$version_without_snapshot" '
-                        # First get just the data array
-                        .data
-                        # Filter array to keep only items where version matches pattern
-                        | map(select(.version | startswith($version)))
-                        # Sort by version (which includes timestamp) in descending order
-                        | sort_by(.version) | reverse
-                        # Take first item (latest) and get its slug
-                        | first | .slug_perm'
+                # For snapshot versions, strip SNAPSHOT and use pattern matching
+                local version_without_snapshot=$(echo "$package_version" | sed 's/SNAPSHOT//g')
+                query="name:$package_name version:$version_without_snapshot*"
+                
+                echo "DEBUG:"
+                echo "    package_name: $package_name"
+                echo "    package_version: $package_version"
+                echo "    version_without_snapshot: $version_without_snapshot"
+                echo "    final query: $query" > /dev/stderr
+                echo "Using snapshot query pattern: $query" > /dev/stderr
+                
+                # Run cloudsmith query
+                query_result=$(cloudsmith list packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY" 2> /dev/null)
+                
+                echo "DEBUG: Raw cloudsmith JSON result:"
+                echo "$query_result" | jq .
+                
+                # Extract .data array
+                echo "DEBUG: Step 1 - Extracted .data array:"
+                echo "$query_result" | jq '.data'
+                
+                # Filter items that start with the version prefix
+                echo "DEBUG: Step 2 - Filtered .data array for versions starting with $version_without_snapshot:"
+                echo "$query_result" | jq --arg version "$version_without_snapshot" '
+                    .data | map(select(.version | startswith($version)))'
+                
+                # Sort the filtered results by version descending
+                echo "DEBUG: Step 3 - Sorted filtered results:"
+                echo "$query_result" | jq --arg version "$version_without_snapshot" '
+                    .data
+                    | map(select(.version | startswith($version)))
+                    | sort_by(.version) | reverse'
+                
+                # Get the slug_perm of the first (latest) package
+                filtered_result=$(echo "$query_result" | jq -r --arg version "$version_without_snapshot" '
+                    .data
+                    | map(select(.version | startswith($version)))
+                    | sort_by(.version) | reverse
+                    | first | .slug_perm')
+                
+                echo "DEBUG: Step 4 - Final slug_perm result:"
+                echo "$filtered_result"
+                
+                echo "$filtered_result"
+            fi
+
+                
               else
                   # For release versions, use exact version matching
                   query="name:$package_name version:$package_version"
