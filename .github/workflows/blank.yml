@@ -56,7 +56,7 @@ jobs:
           REPOSITORY: maven-test
           PACKAGE_NAME: ${{ inputs.artifact-name }}
           PACKAGE_VERSION: ${{ inputs.version }}
-          TIMEOUT: 120
+          TIMEOUT: 180
         shell: bash
         run: |
           set +e
