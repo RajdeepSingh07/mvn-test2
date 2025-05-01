@@ -138,6 +138,7 @@ jobs:
               fi
 
               echo "package-id=$identifier" >> "$GITHUB_OUTPUT"
+              echo "Found package id: $identifier"
           }
 
           wait_for_package_sync "$PACKAGE_NAME" "$PACKAGE_VERSION"
