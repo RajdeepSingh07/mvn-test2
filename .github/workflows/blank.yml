@@ -79,8 +79,7 @@ jobs:
                   echo "    final query: $query" > /dev/stderr
                   echo "Using snapshot query pattern: $query" > /dev/stderr
 
-                  query_result=$(cloudsmith list packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY" 2> /dev/null)
-
+                  query_result=$(cloudsmith list packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY")
                   echo "DEBUG: Raw cloudsmith JSON result:"
                   echo "$query_result" | jq .
 
@@ -111,7 +110,14 @@ jobs:
                   # If it is a release version, match exact version
                   query="name:$package_name version:$package_version"
                   echo "Using release query pattern: $query" > /dev/stderr
-                  cloudsmith list packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY" 2> /dev/null | jq -r '.data[0].slug_perm' | sed -e 's/^"//' -e 's/"$//'
+                  query_result=$(cloudsmith list packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY")
+                  echo "DEBUG: Raw response: $query_result"
+                  echo "$query_result" | jq .
+
+                  filtered_result=$(echo "$query_result" | jq -r '.data[0].slug_perm' | sed -e 's/^"//' -e 's/"$//')
+                  echo "DEBUG: Final slug_perm result: $filtered_result"
+
+                  echo "$filtered_result"
               fi
           }
 
@@ -136,6 +142,7 @@ jobs:
               while [[ $total_time -lt $total_time_limit ]]; do
                   if [[ -z "$identifier" ]] || [[ "$identifier" == "null" ]]; then
                       identifier=$(get_package_identifier "$package_name" "$package_version")
+                      echo "DEBUG: Package identifier: $identifier"
                       if [[ -z "$identifier" ]] || [[ "$identifier" == "null" ]]; then
                         echo "Waiting for package .. (name:$package_name version:$package_version)"
                         total_time=$((total_time + $sleep_time))
@@ -145,6 +152,7 @@ jobs:
                   fi
 
                   package_status=$(get_package_status "$identifier")
+                  echo "DEBUG: Package status: $package_status"
 
                   echo "$package_status" | grep --quiet 'Completed'
                   package_sync_complete=$?
