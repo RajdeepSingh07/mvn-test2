@@ -70,7 +70,7 @@ jobs:
               # If the version is a snapshot, adjust query to match pattern
               if [[ "$package_version" == *"SNAPSHOT"* ]]; then
                   local version_without_snapshot=$(echo "$package_version" | sed 's/SNAPSHOT//g')
-                  query="name:$package_name version:$version_without_snapshot*"
+                  query="name:$package_name AND version:$version_without_snapshot*"
 
                   echo "DEBUG:"
                   echo "    package_name: $package_name"
