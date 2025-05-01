@@ -43,6 +43,10 @@ jobs:
           </settings>
           EOF
 
+      - name: Install Cloudsmith CLI
+        run: |
+          pipx install cloudsmith-cli
+
       - name: Clean & Deploy
         run: |
           mvn clean deploy -B -DskipTests
@@ -79,7 +83,7 @@ jobs:
                   echo "    final query: $query" > /dev/stderr
                   echo "Using snapshot query pattern: $query" > /dev/stderr
 
-                  query_result=$(cloudsmith list packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY")
+                  query_result=$(cloudsmith list --api-key 95e54aaea50edd3f1841bda4fc3a1b3eaa6c545d packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY")
                   echo "DEBUG: Raw cloudsmith JSON result:"
                   echo "$query_result" | jq .
 
