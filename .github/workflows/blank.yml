@@ -71,6 +71,11 @@ jobs:
                   # For snapshot versions, strip SNAPSHOT and use pattern matching
                   local version_without_snapshot=$(echo "$package_version" | sed 's/SNAPSHOT//g')
                   query="name:$package_name version:$version_without_snapshot*"
+                  echo "DEBUG:"
+                  echo "  package_name: $package_name"
+                  echo "  package_version: $package_version"
+                  echo "  version_without_snapshot: $version_without_snapshot"
+                  echo "  final query: $query" > /dev/stderr
                   echo "Using snapshot query pattern: $query" > /dev/stderr
                   cloudsmith list packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY" 2> /dev/null | \
                     jq -r --arg version "$version_without_snapshot" '
