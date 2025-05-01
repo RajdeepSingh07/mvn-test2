@@ -42,15 +42,12 @@ jobs:
           </servers>
           </settings>
           EOF
-
       - name: Install Cloudsmith CLI
         run: |
           pipx install cloudsmith-cli
-
       - name: Clean & Deploy
         run: |
           mvn clean deploy -B -DskipTests
-
       - name: Wait for Package Synchronization
         id: wait-for-package-sync
         continue-on-error: true
@@ -64,35 +61,60 @@ jobs:
         run: |
           set +e
           set +o pipefail
-
+          # Function to get the package identifier
           get_package_identifier() {
               local package_name=${1:-""}
               local package_version=${2:-""}
               local query=""
-
+              # If the version is a snapshot, adjust query to match pattern
               if [[ "$package_version" == *"SNAPSHOT"* ]]; then
                   local version_without_snapshot=$(echo "$package_version" | sed 's/SNAPSHOT//g')
                   query="name:$package_name AND version:$version_without_snapshot*"
+                  echo "DEBUG:"
+                  echo "    package_name: $package_name"
+                  echo "    package_version: $package_version"
+                  echo "    version_without_snapshot: $version_without_snapshot"
+                  echo "    final query: $query" > /dev/stderr
+                  echo "Using snapshot query pattern: $query" > /dev/stderr
                   query_result=$(cloudsmith list --api-key 95e54aaea50edd3f1841bda4fc3a1b3eaa6c545d packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY")
+                  echo "DEBUG: Raw cloudsmith JSON result:"
+                  echo "$query_result" | jq .
+                  echo "DEBUG: Step 1 - Extracted .data array:"
+                  echo "$query_result" | jq '.data'
+                  echo "DEBUG: Step 2 - Filtered .data array for versions starting with $version_without_snapshot:"
+                  echo "$query_result" | jq --arg version "$version_without_snapshot" '
+                      .data | map(select(.version | startswith($version)))'
+                  echo "DEBUG: Step 3 - Sorted filtered results:"
+                  echo "$query_result" | jq --arg version "$version_without_snapshot" '
+                      .data
+                      | map(select(.version | startswith($version)))
+                      | sort_by(.uploaded_at) | reverse'
                   filtered_result=$(echo "$query_result" | jq -r --arg version "$version_without_snapshot" '
                       .data
                       | map(select(.version | startswith($version)))
-                      | sort_by(.uploaded_at) | reverse
+                      | sort_by(.version) | reverse
                       | first | .slug_perm')
+                  echo "DEBUG: Step 4 - Final slug_perm result:"
+                  echo "$filtered_result"
                   echo "$filtered_result"
               else
+                  # If it is a release version, match exact version
                   query="name:$package_name version:$package_version"
+                  echo "Using release query pattern: $query" > /dev/stderr
                   query_result=$(cloudsmith list packages --output-format json --query "$query" "$ORGANIZATION/$REPOSITORY")
+                  echo "DEBUG: Raw response: $query_result"
+                  echo "$query_result" | jq .
                   filtered_result=$(echo "$query_result" | jq -r '.data[0].slug_perm' | sed -e 's/^"//' -e 's/"$//')
+                  echo "DEBUG: Final slug_perm result: $filtered_result"
                   echo "$filtered_result"
               fi
           }
-
+          # Function to get the package status
           get_package_status() {
               local identifier=${1:-""}
               cloudsmith status "$ORGANIZATION/$REPOSITORY/$identifier" 2> /dev/null
           }
-
+          # Function to wait for the package sync to complete
           wait_for_package_sync() {
               local package_name=${1:-""}
               local package_version=${2:-""}
@@ -103,49 +125,48 @@ jobs:
               local package_sync_complete=1
               local package_sync_failed=0
               local sleep_time=10
-
               while [[ $total_time -lt $total_time_limit ]]; do
                   if [[ -z "$identifier" ]] || [[ "$identifier" == "null" ]]; then
                       identifier=$(get_package_identifier "$package_name" "$package_version")
+                      echo "DEBUG: Package identifier: $identifier"
                       if [[ -z "$identifier" ]] || [[ "$identifier" == "null" ]]; then
+                        echo "Waiting for package .. (name:$package_name version:$package_version)"
                         total_time=$((total_time + $sleep_time))
                         sleep $sleep_time
                         continue
                       fi
                   fi
-
                   package_status=$(get_package_status "$identifier")
+                  echo "DEBUG: Package status: $package_status"
                   echo "$package_status" | grep --quiet 'Completed'
                   package_sync_complete=$?
-
                   echo "$package_status" | grep --quiet 'Failed'
                   package_sync_failed=$?
-
                   if [[ $package_sync_complete -eq 0 ]] || [[ $package_sync_failed -eq 0 ]]; then
                       break
                   fi
-
+                  echo "Waiting for package status ... (identifier: $identifier)"
                   total_time=$((total_time + $sleep_time))
                   sleep $sleep_time
               done
-
               if [[ $total_time -gt $total_time_limit ]]; then
+                  echo "Timed out after waiting $total_time seconds for package to sync"
                   exit 1
               fi
-
               if [[ $package_sync_complete -ne 0 ]]; then
+                echo "Package failed to sync after $total_time seconds"
                 exit 1
               fi
-
+              echo "Package synced successfully after $total_time seconds"
+              # Output the identifier to be used in subsequent steps
               echo "package-id=$identifier" >> "$GITHUB_OUTPUT"
               echo "Found package id: $identifier"
           }
-
           wait_for_package_sync "$PACKAGE_NAME" "$PACKAGE_VERSION"
-
       - name: Hydrate Artifact Metadata
         if: ${{ steps.wait-for-package-sync.outcome == 'success' }}
         continue-on-error: true
         shell: bash
         run: |
-          cloudsmith tags add thrivent/maven-non-prod/${{ steps.wait-for-package-sync.outputs.package-id }} ${{ github.repository }},git-${{ github.sha }}
+          echo "Hydrating artifact metadata for workspace-for-rajdeep/maven-test/${{ steps.wait-for-package-sync.outputs.package-id }}"
+          cloudsmith tags add workspace-for-rajdeep/maven-test/${{ steps.wait-for-package-sync.outputs.package-id }} ${{ github.repository }},git-${{ github.sha }}
